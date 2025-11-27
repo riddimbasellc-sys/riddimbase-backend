@@ -1,0 +1,22 @@
+{
+  "name": "riddimbase-presign-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node --env-file=.env index.js",
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.48.0",
+    "@aws-sdk/client-s3": "^3.679.0",
+    "@aws-sdk/s3-request-presigner": "^3.679.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "nodemailer": "^6.9.14",
+    "pdfkit": "^0.13.0",
+    "uuid": "^9.0.1"
+  }
+}
