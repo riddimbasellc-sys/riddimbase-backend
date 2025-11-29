@@ -10,11 +10,13 @@ import { LICENSE_TERMS, DEFAULT_TERMS } from './licenseTerms.js'
 import { buildBeatLicenseContract, buildProducerAgreement } from './contracts.js'
 import { createClient } from '@supabase/supabase-js'
 import authRoutes from './authRoutes.js'
+import settingsRoutes from '../backend/settingsRoutes.js'
 
 const app = express()
 app.use(cors())
 app.use(express.json())
 app.use(authRoutes)
+app.use(settingsRoutes)
 
 const REGION = process.env.AWS_REGION
 const BUCKET = process.env.S3_BUCKET
