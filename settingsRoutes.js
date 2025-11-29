@@ -1,8 +1,8 @@
-const express = require('express')
+import express from 'express'
 
 const router = express.Router()
 
-// In-memory settings; seeded with defaults matching the frontend.
+// In-memory settings; seeded with defaults matching the frontend design system.
 let settings = {
   theme: {
     primaryColor: '#ef4444',
@@ -10,11 +10,12 @@ let settings = {
     accentColor: '#f97316',
     backgroundColor: '#020617',
     surfaceColor: '#020617',
-    fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
+    fontFamily:
+      'Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
   },
   announcement: {
     enabled: true,
-    text: 'Welcome to RiddimBase — the home of Caribbean beats.',
+    text: 'Welcome to RiddimBase – the home of Caribbean beats.',
     backgroundColor: '#111827',
     textColor: '#e5e7eb',
   },
@@ -22,7 +23,13 @@ let settings = {
     links: [
       { id: 'home', label: 'Home', href: '/', visible: true, external: false },
       { id: 'beats', label: 'Beats', href: '/beats', visible: true, external: false },
-      { id: 'producers', label: 'Producers', href: '/producers', visible: true, external: false },
+      {
+        id: 'producers',
+        label: 'Producers',
+        href: '/producers',
+        visible: true,
+        external: false,
+      },
       { id: 'jobs', label: 'Jobs', href: '/jobs', visible: true, external: false },
     ],
   },
@@ -48,9 +55,7 @@ router.get('/api/settings', (req, res) => {
 })
 
 // PUT /api/settings
-// Ensure your main Express app uses app.use(express.json()) before this router,
-// or keep express.json() here if you only mount it once.
-router.put('/api/settings', express.json(), (req, res) => {
+router.put('/api/settings', (req, res) => {
   const body = req.body || {}
   settings = {
     ...settings,
@@ -63,5 +68,5 @@ router.put('/api/settings', express.json(), (req, res) => {
   res.json(settings)
 })
 
-module.exports = router
+export default router
 
