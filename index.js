@@ -10,7 +10,7 @@ import { LICENSE_TERMS, DEFAULT_TERMS } from './licenseTerms.js'
 import { buildBeatLicenseContract, buildProducerAgreement } from './contracts.js'
 import { createClient } from '@supabase/supabase-js'
 import authRoutes from './authRoutes.js'
-import settingsRoutes from '../backend/settingsRoutes.js'
+import settingsRoutes from "./server/routes/settingsRoutes.js"
 
 const app = express()
 app.use(cors())
@@ -671,3 +671,4 @@ app.post('/api/notify', async (req, res) => {
 })
 
 app.listen(PORT, () => console.log(`[s3-server] listening on ${PORT}`))
+
