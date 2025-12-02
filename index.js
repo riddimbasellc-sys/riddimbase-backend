@@ -221,6 +221,122 @@ if (supabaseUrl && supabaseServiceKey) {
 
 const supabaseAvailable = () => !!supabase
 
+// Helper: increment a daily metric row in a table (beat_metrics_daily or producer_metrics_daily).
+async function incrementDailyMetric(table, match) {
+  const todayIso = new Date().toISOString()
+  // Try to find existing row for this key
+  const { data, error } = await supabase
+    .from(table)
+    .select('id,value')
+    .match(match)
+    .maybeSingle()
+
+  if (error && error.code !== 'PGRST116') {
+    throw error
+  }
+
+  if (data && data.id) {
+    const newVal = (data.value || 0) + 1
+    const { error: updErr } = await supabase
+      .from(table)
+      .update({ value: newVal, updated_at: todayIso })
+      .eq('id', data.id)
+    if (updErr) throw updErr
+  } else {
+    const payload = { ...match, value: 1, created_at: todayIso, updated_at: todayIso }
+    const { error: insErr } = await supabase.from(table).insert(payload)
+    if (insErr) throw insErr
+  }
+}
+
+// Track a beat play in beat_metrics_daily and producer_metrics_daily.
+// Body: { beatId: uuid, producerId?: uuid }
+app.post('/api/metrics/beat-play', async (req, res) => {
+  const { beatId, producerId } = req.body || {}
+  if (!beatId) {
+    return res.status(400).json({ error: 'beatId is required' })
+  }
+  if (!supabaseAvailable()) {
+    console.warn('[metrics] Supabase not configured, skipping beat-play persist')
+    return res.status(200).json({ ok: false, stored: false })
+  }
+  const day = new Date().toISOString().slice(0, 10)
+  try {
+    await incrementDailyMetric('beat_metrics_daily', {
+      beat_id: beatId,
+      metric: 'plays',
+      day,
+    })
+    if (producerId) {
+      await incrementDailyMetric('producer_metrics_daily', {
+        producer_id: producerId,
+        metric: 'plays',
+        day,
+      })
+    }
+    res.status(200).json({ ok: true, stored: true })
+  } catch (err) {
+    console.error('[metrics] beat-play error', err)
+    // We still return 200 so the frontend never breaks playback.
+    res.status(200).json({ ok: false, stored: false })
+  }
+})
+
+// Track arbitrary producer-level metrics (likes, followers, etc.).
+// Body: { producerId: uuid, metric: 'likes' | 'followers', delta: 1 | -1 }
+app.post('/api/metrics/producer', async (req, res) => {
+  const { producerId, metric, delta } = req.body || {}
+  if (!producerId || !metric || !delta) {
+    return res.status(400).json({ error: 'producerId, metric and delta are required' })
+  }
+  if (!supabaseAvailable()) {
+    console.warn('[metrics] Supabase not configured, skipping producer metric')
+    return res.status(200).json({ ok: false, stored: false })
+  }
+  const day = new Date().toISOString().slice(0, 10)
+  try {
+    // Read existing value (if any)
+    const { data, error } = await supabase
+      .from('producer_metrics_daily')
+      .select('id,value')
+      .match({ producer_id: producerId, metric, day })
+      .maybeSingle()
+
+    if (error && error.code !== 'PGRST116') {
+      throw error
+    }
+
+    const todayIso = new Date().toISOString()
+    if (data && data.id) {
+      const next = (data.value || 0) + Number(delta)
+      const clamped = next < 0 ? 0 : next
+      const { error: updErr } = await supabase
+        .from('producer_metrics_daily')
+        .update({ value: clamped, updated_at: todayIso })
+        .eq('id', data.id)
+      if (updErr) throw updErr
+    } else {
+      const value = delta > 0 ? Number(delta) : 0
+      const { error: insErr } = await supabase
+        .from('producer_metrics_daily')
+        .insert({
+          producer_id: producerId,
+          metric,
+          day,
+          value,
+          created_at: todayIso,
+          updated_at: todayIso,
+        })
+      if (insErr) throw insErr
+    }
+
+    res.status(200).json({ ok: true, stored: true })
+  } catch (err) {
+    console.error('[metrics] producer metric error', err)
+    res.status(200).json({ ok: false, stored: false })
+  }
+})
+
 // -------- Admin users API (live data for Admin panel) --------
 // Returns a flattened list of Supabase auth users for the AdminUsers screen.
 // Shape: [{ id, email, banned, producer, createdAt, lastSignInAt }]
@@ -405,6 +521,168 @@ app.delete('/admin/beats/:id', async (req, res) => {
   } catch (err) {
     console.error('[admin/beats delete] unexpected', err)
     res.status(500).json({ error: 'Failed to delete beat' })
+  }
+})
+
+// -------- Admin dashboard metrics (global counts) --------
+app.get('/admin/metrics', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+  try {
+    const now = new Date()
+    const currentYear = now.getFullYear()
+    const currentMonth = now.getMonth()
+    const nowIso = now.toISOString()
+
+    const [
+      beatsCountResp,
+      salesResp,
+      subsResp,
+      ticketsOpenResp,
+      reportsOpenResp,
+      agentsResp,
+      usersResp,
+      activeBoostsResp,
+    ] = await Promise.all([
+      supabase.from('beats').select('id', { count: 'exact', head: true }),
+      supabase.from('sales').select('beat_id,amount,created_at'),
+      supabase.from('subscriptions').select('plan_id,status'),
+      supabase
+        .from('support_tickets')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'open'),
+      supabase
+        .from('reports')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'open'),
+      supabase
+        .from('support_agents')
+        .select('id', { count: 'exact', head: true })
+        .eq('active', true),
+      supabase.auth.admin.listUsers({ page: 1, perPage: 1000 }),
+      supabase
+        .from('boosted_beats')
+        .select('beat_id,tier,expires_at')
+        .gt('expires_at', nowIso),
+    ])
+
+    const totalBeats = beatsCountResp?.count || 0
+
+    const salesRows = salesResp?.data || []
+    const totalSales = salesRows.length
+    let monthlyRevenue = 0
+    let monthlySales = 0
+    for (const s of salesRows) {
+      if (!s.created_at) continue
+      const d = new Date(s.created_at)
+      if (d.getFullYear() === currentYear && d.getMonth() === currentMonth) {
+        monthlySales += 1
+        monthlyRevenue += Number(s.amount || 0)
+      }
+    }
+
+    const subsRows = subsResp?.data || []
+    let activeStarter = 0
+    let activePro = 0
+    let activeProducerPro = 0
+    for (const sub of subsRows) {
+      if (sub.status !== 'active') continue
+      if (sub.plan_id === 'starter') activeStarter += 1
+      else if (sub.plan_id === 'pro') activePro += 1
+      else if (sub.plan_id === 'producer-pro') activeProducerPro += 1
+    }
+
+    const openTickets = ticketsOpenResp?.count || 0
+    const openReports = reportsOpenResp?.count || 0
+    const activeAgents = agentsResp?.count || 0
+
+    const totalUsers = Array.isArray(usersResp?.data?.users)
+      ? usersResp.data.users.length
+      : Array.isArray(usersResp?.data)
+      ? usersResp.data.length
+      : 0
+
+    // Build a simple "top beats" list using sales counts and active boost tiers.
+    const salesByBeat = new Map()
+    for (const s of salesRows) {
+      const beatId = s.beat_id
+      if (!beatId) continue
+      const entry = salesByBeat.get(beatId) || {
+        beatId,
+        sales: 0,
+        revenue: 0,
+      }
+      entry.sales += 1
+      entry.revenue += Number(s.amount || 0)
+      salesByBeat.set(beatId, entry)
+    }
+
+    let topBeats = []
+    const salesEntries = Array.from(salesByBeat.values())
+      .sort((a, b) => b.sales - a.sales || b.revenue - a.revenue)
+      .slice(0, 10)
+
+    if (salesEntries.length) {
+      const ids = salesEntries.map((e) => e.beatId)
+      const { data: beatRows, error: beatsErr } = await supabase
+        .from('beats')
+        .select('id,title,producer,genre,bpm')
+        .in('id', ids)
+      if (beatsErr) {
+        console.warn('[admin/metrics] topBeats beats query error', beatsErr)
+      }
+      const beatMap = new Map()
+      ;(beatRows || []).forEach((b) => {
+        beatMap.set(b.id, b)
+      })
+
+      const boostMap = new Map()
+      const boostRows = activeBoostsResp?.data || []
+      for (const row of boostRows) {
+        if (!row.beat_id) continue
+        const existing = boostMap.get(row.beat_id)
+        if (!existing || (row.tier || 0) > existing) {
+          boostMap.set(row.beat_id, row.tier || 0)
+        }
+      }
+
+      topBeats = salesEntries.map((entry) => {
+        const beat = beatMap.get(entry.beatId) || {}
+        return {
+          id: entry.beatId,
+          title: beat.title || 'Untitled beat',
+          producer: beat.producer || null,
+          genre: beat.genre || null,
+          bpm: beat.bpm || null,
+          // Plays are not persisted globally yet; use sales count as a proxy for now.
+          plays: entry.sales,
+          sales: entry.sales,
+          revenue: entry.revenue,
+          boostTier: boostMap.get(entry.beatId) || null,
+        }
+      })
+    }
+
+    res.json({
+      totalBeats,
+      totalUsers,
+      totalSales,
+      monthlyRevenue,
+      monthlySales,
+      openTickets,
+      openReports,
+      activeAgents,
+      activeStarter,
+      activePro,
+      activeProducerPro,
+      topBeats,
+    })
+  } catch (err) {
+    console.error('[admin/metrics] error', err)
+    res.status(500).json({ error: 'Failed to load metrics' })
   }
 })
 
