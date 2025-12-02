@@ -76,7 +76,8 @@ router.post('/upload-beat', upload.single('file'), async (req, res) => {
       Key: key,
       Body: file.buffer,
       ContentType: file.mimetype,
-      ACL: 'public-read',
+      // ACL intentionally omitted: bucket uses Object Ownership "Bucket owner enforced"
+      // and does not allow ACLs. Public access should be handled via bucket policy.
     })
 
     await s3.send(putCommand)
@@ -115,4 +116,3 @@ router.post('/upload-beat', upload.single('file'), async (req, res) => {
 })
 
 export default router
-
