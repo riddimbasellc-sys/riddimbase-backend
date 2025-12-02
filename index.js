@@ -221,6 +221,193 @@ if (supabaseUrl && supabaseServiceKey) {
 
 const supabaseAvailable = () => !!supabase
 
+// -------- Admin users API (live data for Admin panel) --------
+// Returns a flattened list of Supabase auth users for the AdminUsers screen.
+// Shape: [{ id, email, banned, producer, createdAt, lastSignInAt }]
+app.get('/admin/users', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.status(500).json({ error: 'Supabase not configured on server' })
+  }
+
+  try {
+    const { data, error } = await supabase.auth.admin.listUsers({
+      page: 1,
+      perPage: 1000
+    })
+
+    if (error) {
+      console.error('[admin/users] listUsers error', error)
+      return res.status(500).json({ error: 'Failed to load users' })
+    }
+
+    const src = Array.isArray(data?.users) ? data.users : (Array.isArray(data) ? data : [])
+
+    const users = src.map((u) => ({
+      id: u.id,
+      email: u.email,
+      banned: !!u.user_metadata?.banned,
+      producer: !!u.user_metadata?.producer,
+      createdAt: u.created_at || null,
+      lastSignInAt: u.last_sign_in_at || null
+    }))
+
+    res.json(users)
+  } catch (err) {
+    console.error('[admin/users] unexpected error', err)
+    res.status(500).json({ error: 'Failed to load users' })
+  }
+})
+
+// Helper: fetch a user and merge user_metadata changes safely
+async function updateUserMetadata(userId, patch) {
+  const { data, error } = await supabase.auth.admin.getUserById(userId)
+  if (error || !data?.user) {
+    throw error || new Error('User not found')
+  }
+  const meta = data.user.user_metadata || {}
+  const { data: updated, error: updateError } =
+    await supabase.auth.admin.updateUserById(userId, {
+      user_metadata: { ...meta, ...patch },
+    })
+  if (updateError) throw updateError
+  return updated?.user || data.user
+}
+
+// Mark a user as banned in user_metadata
+app.post('/admin/users/:id/ban', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+  const { id } = req.params
+  try {
+    const user = await updateUserMetadata(id, { banned: true })
+    res.json({ ok: true, id: user.id, banned: true })
+  } catch (err) {
+    console.error('[admin/users ban] error', err)
+    res.status(500).json({ error: 'Failed to ban user' })
+  }
+})
+
+// Flag a user as a producer in user_metadata
+app.post('/admin/users/:id/producer', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+  const { id } = req.params
+  try {
+    const user = await updateUserMetadata(id, { producer: true })
+    res.json({ ok: true, id: user.id, producer: true })
+  } catch (err) {
+    console.error('[admin/users producer] error', err)
+    res.status(500).json({ error: 'Failed to approve producer' })
+  }
+})
+
+// Trigger a Supabase password recovery email for the user
+app.post('/admin/users/:id/reset-password', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+  const { id } = req.params
+  try {
+    const { data, error } = await supabase.auth.admin.getUserById(id)
+    if (error || !data?.user?.email) {
+      console.error('[admin/users reset] getUser error', error)
+      return res.status(404).json({ error: 'User not found' })
+    }
+    const email = data.user.email
+    const { error: linkError } = await supabase.auth.admin.generateLink({
+      type: 'recovery',
+      email,
+    })
+    if (linkError) {
+      console.error('[admin/users reset] generateLink error', linkError)
+      return res.status(500).json({ error: 'Failed to trigger reset email' })
+    }
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[admin/users reset] unexpected error', err)
+    res.status(500).json({ error: 'Failed to reset password' })
+  }
+})
+
+// -------- Admin beats moderation API (Supabase beats table) --------
+app.post('/admin/beats/:id/hide', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+  const { id } = req.params
+  try {
+    const { data, error } = await supabase
+      .from('beats')
+      .update({ hidden: true })
+      .eq('id', id)
+      .select()
+      .maybeSingle()
+    if (error) {
+      console.error('[admin/beats hide] error', error)
+      return res.status(500).json({ error: 'Failed to hide beat' })
+    }
+    res.json({ ok: true, beat: data })
+  } catch (err) {
+    console.error('[admin/beats hide] unexpected', err)
+    res.status(500).json({ error: 'Failed to hide beat' })
+  }
+})
+
+app.post('/admin/beats/:id/flag', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+  const { id } = req.params
+  try {
+    const { data, error } = await supabase
+      .from('beats')
+      .update({ flagged: true })
+      .eq('id', id)
+      .select()
+      .maybeSingle()
+    if (error) {
+      console.error('[admin/beats flag] error', error)
+      return res.status(500).json({ error: 'Failed to flag beat' })
+    }
+    res.json({ ok: true, beat: data })
+  } catch (err) {
+    console.error('[admin/beats flag] unexpected', err)
+    res.status(500).json({ error: 'Failed to flag beat' })
+  }
+})
+
+app.delete('/admin/beats/:id', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+  const { id } = req.params
+  try {
+    const { error } = await supabase.from('beats').delete().eq('id', id)
+    if (error) {
+      console.error('[admin/beats delete] error', error)
+      return res.status(500).json({ error: 'Failed to delete beat' })
+    }
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('[admin/beats delete] unexpected', err)
+    res.status(500).json({ error: 'Failed to delete beat' })
+  }
+})
+
 // Public list of active boosted beats (for homepage, search, etc.)
 // Returns minimal data; frontend joins with beat catalog.
 app.get('/api/boosted', async (req, res) => {
