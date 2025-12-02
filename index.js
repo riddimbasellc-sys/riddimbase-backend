@@ -10,7 +10,7 @@ import { LICENSE_TERMS, DEFAULT_TERMS } from './licenseTerms.js'
 import { buildBeatLicenseContract, buildProducerAgreement } from './contracts.js'
 import { createClient } from '@supabase/supabase-js'
 import authRoutes from './authRoutes.js'
-import settingsRoutes from '../backend/settingsRoutes.js'
+import settingsRoutes from './settingsRoutes.js'
 import beatsRoutes from './beatsRoutes.js'
 
 const app = express()
