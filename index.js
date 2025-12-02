@@ -10,13 +10,15 @@ import { LICENSE_TERMS, DEFAULT_TERMS } from './licenseTerms.js'
 import { buildBeatLicenseContract, buildProducerAgreement } from './contracts.js'
 import { createClient } from '@supabase/supabase-js'
 import authRoutes from './authRoutes.js'
-import settingsRoutes from "./settingsRoutes.js"
+import settingsRoutes from '../backend/settingsRoutes.js'
+import beatsRoutes from './beatsRoutes.js'
 
 const app = express()
 app.use(cors())
 app.use(express.json())
 app.use(authRoutes)
 app.use(settingsRoutes)
+app.use('/beats', beatsRoutes)
 
 const REGION = process.env.AWS_REGION
 const BUCKET = process.env.S3_BUCKET
@@ -671,5 +673,3 @@ app.post('/api/notify', async (req, res) => {
 })
 
 app.listen(PORT, () => console.log(`[s3-server] listening on ${PORT}`))
-
-
