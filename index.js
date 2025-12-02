@@ -276,6 +276,53 @@ app.get('/api/admin/boosts', async (req, res) => {
   }
 })
 
+// Create a new boosted beat (server-side Supabase insert)
+app.post('/boosts/create', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.status(500).json({ error: 'Boosts not available (Supabase missing)' })
+  }
+  try {
+    const { beat_id, producer_id, days, paypal_order_id } = req.body || {}
+    if (!beat_id || !producer_id || !days) {
+      return res.status(400).json({ error: 'beat_id, producer_id and days are required' })
+    }
+
+    const now = new Date()
+    const expires = new Date(now.getTime() + Number(days) * 24 * 60 * 60 * 1000)
+
+    // Simple tier mapping based on days (1,3,7,14,30)
+    let tier = 1
+    if (days >= 7 && days < 14) tier = 2
+    else if (days >= 14) tier = 3
+
+    const priorityScore = tier * 100
+
+    const { data, error } = await supabase
+      .from('boosted_beats')
+      .insert({
+        beat_id,
+        producer_id,
+        tier,
+        starts_at: now.toISOString(),
+        expires_at: expires.toISOString(),
+        priority_score: priorityScore,
+        paypal_order_id: paypal_order_id || null,
+      })
+      .select('id, beat_id, producer_id, tier, starts_at, expires_at, priority_score')
+      .maybeSingle()
+
+    if (error) {
+      console.error('[boosts/create] supabase error', error)
+      return res.status(500).json({ error: 'Failed to create boost' })
+    }
+
+    res.json({ ok: true, boost: data })
+  } catch (err) {
+    console.error('[boosts/create] unexpected', err)
+    res.status(500).json({ error: 'Boost create failed' })
+  }
+})
+
 // Record a completed job payment (PayPal order) and optionally persist metadata.
 // Body: { orderId: string, amount?: number, currency?: string }
 app.post('/api/jobs/:jobId/pay', async (req, res) => {
