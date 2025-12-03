@@ -1184,4 +1184,96 @@ app.post('/api/notify', async (req, res) => {
   }
 })
 
+// Global site social links (footer icons)
+const DEFAULT_SOCIALS = [
+  { id: 'instagram', network: 'instagram', url: '' },
+  { id: 'youtube', network: 'youtube', url: '' },
+  { id: 'tiktok', network: 'tiktok', url: '' },
+  { id: 'twitter', network: 'twitter', url: '' },
+  { id: 'facebook', network: 'facebook', url: '' },
+  { id: 'soundcloud', network: 'soundcloud', url: '' },
+  { id: 'spotify', network: 'spotify', url: '' },
+]
+
+app.get('/api/site/social-links', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.json(DEFAULT_SOCIALS)
+  }
+  try {
+    const { data, error } = await supabase
+      .from('site_social_links')
+      .select('id,network,url,position')
+      .order('position', { ascending: true })
+
+    if (error) {
+      console.warn('[site_social_links] select error', error.message)
+      return res.json(DEFAULT_SOCIALS)
+    }
+
+    if (!data || !data.length) {
+      return res.json(DEFAULT_SOCIALS)
+    }
+
+    res.json(
+      data.map((row) => ({
+        id: row.id,
+        network: row.network,
+        url: row.url || '',
+      })),
+    )
+  } catch (err) {
+    console.error('[site_social_links] unexpected error', err)
+    res.json(DEFAULT_SOCIALS)
+  }
+})
+
+app.put('/api/site/social-links', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.status(500).json({ error: 'Supabase not configured on server' })
+  }
+  const links = Array.isArray(req.body?.links) ? req.body.links : []
+  try {
+    const cleaned = links.map((l, index) => ({
+      id: l.id || l.network,
+      network: l.network,
+      url: l.url || '',
+      position: index,
+      updated_at: new Date().toISOString(),
+    }))
+
+    if (!cleaned.length) {
+      const { error } = await supabase
+        .from('site_social_links')
+        .delete()
+        .neq('id', '')
+      if (error) {
+        console.error('[site_social_links] delete all error', error)
+      }
+      return res.json([])
+    }
+
+    const { data, error } = await supabase
+      .from('site_social_links')
+      .upsert(cleaned, { onConflict: 'id' })
+      .select('id,network,url,position')
+      .order('position', { ascending: true })
+
+    if (error) {
+      console.error('[site_social_links] upsert error', error)
+      return res.status(500).json({ error: 'Failed to save social links' })
+    }
+
+    res.json(
+      (data || []).map((row) => ({
+        id: row.id,
+        network: row.network,
+        url: row.url || '',
+      })),
+    )
+  } catch (err) {
+    console.error('[site_social_links] unexpected save error', err)
+    res.status(500).json({ error: 'Failed to save social links' })
+  }
+})
+
 app.listen(PORT, () => console.log(`[s3-server] listening on ${PORT}`))
