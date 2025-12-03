@@ -1294,6 +1294,96 @@ app.put('/api/site/social-links', async (req, res) => {
   }
 })
 
+// Footer navigation links (About, FAQ, Support, etc.)
+const DEFAULT_FOOTER_LINKS = [
+  { id: 'about', label: 'About', path: '/about' },
+  { id: 'faq', label: 'FAQ', path: '/faq' },
+  { id: 'support', label: 'Support', path: '/support' },
+  { id: 'terms', label: 'Terms', path: '/terms' },
+  { id: 'privacy', label: 'Privacy', path: '/privacy' },
+]
+
+app.get('/api/site/footer-links', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.json(DEFAULT_FOOTER_LINKS)
+  }
+  try {
+    const { data, error } = await supabase
+      .from('site_footer_links')
+      .select('id,label,path,position')
+      .order('position', { ascending: true })
+
+    if (error) {
+      console.warn('[site_footer_links] select error', error.message)
+      return res.json(DEFAULT_FOOTER_LINKS)
+    }
+
+    if (!data || !data.length) {
+      return res.json(DEFAULT_FOOTER_LINKS)
+    }
+
+    res.json(
+      data.map((row) => ({
+        id: row.id,
+        label: row.label,
+        path: row.path,
+      })),
+    )
+  } catch (err) {
+    console.error('[site_footer_links] unexpected error', err)
+    res.json(DEFAULT_FOOTER_LINKS)
+  }
+})
+
+app.put('/api/site/footer-links', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.status(500).json({ error: 'Supabase not configured on server' })
+  }
+  const links = Array.isArray(req.body?.links) ? req.body.links : []
+  try {
+    const cleaned = links.map((l, index) => ({
+      id: l.id || l.label,
+      label: l.label,
+      path: l.path || l.to || '/',
+      position: index,
+      updated_at: new Date().toISOString(),
+    }))
+
+    if (!cleaned.length) {
+      const { error } = await supabase
+        .from('site_footer_links')
+        .delete()
+        .neq('id', '')
+      if (error) {
+        console.error('[site_footer_links] delete all error', error)
+      }
+      return res.json([])
+    }
+
+    const { data, error } = await supabase
+      .from('site_footer_links')
+      .upsert(cleaned, { onConflict: 'id' })
+      .select('id,label,path,position')
+      .order('position', { ascending: true })
+
+    if (error) {
+      console.error('[site_footer_links] upsert error', error)
+      return res.status(500).json({ error: 'Failed to save footer links' })
+    }
+
+    res.json(
+      (data || []).map((row) => ({
+        id: row.id,
+        label: row.label,
+        path: row.path,
+      })),
+    )
+  } catch (err) {
+    console.error('[site_footer_links] unexpected save error', err)
+    res.status(500).json({ error: 'Failed to save footer links' })
+  }
+})
+
 // Homepage hero banners (image/video URLs, active flag)
 app.get('/api/site/banners', async (req, res) => {
   if (!supabaseAvailable()) {
