@@ -1184,6 +1184,24 @@ app.post('/api/notify', async (req, res) => {
   }
 })
 
+// ---------------------------
+// Site-wide configuration
+// ---------------------------
+
+// Homepage banner defaults (mirror frontend bannerContentService defaults)
+const DEFAULT_BANNER_CONTENT = {
+  headline: 'Platform Spotlight',
+  headlineBold: true,
+  headlineItalic: false,
+  headlineSize: 'text-2xl',
+  headlineFont: 'font-display',
+  body: 'Discover authentic Caribbean production. Browse fresh beats & riddims uploaded daily by emerging producers.',
+  bodyBold: false,
+  bodyItalic: false,
+  bodySize: 'text-sm',
+  bodyFont: 'font-sans',
+}
+
 // Global site social links (footer icons)
 const DEFAULT_SOCIALS = [
   { id: 'instagram', network: 'instagram', url: '' },
@@ -1273,6 +1291,273 @@ app.put('/api/site/social-links', async (req, res) => {
   } catch (err) {
     console.error('[site_social_links] unexpected save error', err)
     res.status(500).json({ error: 'Failed to save social links' })
+  }
+})
+
+// Homepage hero banners (image/video URLs, active flag)
+app.get('/api/site/banners', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.json([])
+  }
+  try {
+    const { data, error } = await supabase
+      .from('site_banners')
+      .select('id,data_url,kind,content_type,is_active,created_at')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.warn('[site_banners] select error', error.message)
+      return res.json([])
+    }
+
+    const mapped = (data || []).map((row) => ({
+      id: row.id,
+      dataUrl: row.data_url,
+      kind: row.kind || 'image',
+      contentType: row.content_type || null,
+      active: !!row.is_active,
+      createdAt: row.created_at,
+    }))
+
+    res.json(mapped)
+  } catch (err) {
+    console.error('[site_banners] list unexpected error', err)
+    res.json([])
+  }
+})
+
+// Create a new banner entry after the file has been uploaded to S3.
+// Body: { dataUrl, kind?, contentType? }
+app.post('/api/site/banners', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.status(500).json({ error: 'Supabase not configured on server' })
+  }
+  const { dataUrl, kind, contentType } = req.body || {}
+  if (!dataUrl) {
+    return res.status(400).json({ error: 'dataUrl is required' })
+  }
+  try {
+    const nowIso = new Date().toISOString()
+    const payload = {
+      data_url: dataUrl,
+      kind: kind || 'image',
+      content_type: contentType || null,
+      is_active: false,
+      updated_at: nowIso,
+    }
+    const { data, error } = await supabase
+      .from('site_banners')
+      .insert(payload)
+      .select('id,data_url,kind,content_type,is_active,created_at')
+      .single()
+
+    if (error) {
+      console.error('[site_banners] insert error', error)
+      return res.status(500).json({ error: 'Failed to save banner' })
+    }
+
+    res.json({
+      id: data.id,
+      dataUrl: data.data_url,
+      kind: data.kind || 'image',
+      contentType: data.content_type || null,
+      active: !!data.is_active,
+      createdAt: data.created_at,
+    })
+  } catch (err) {
+    console.error('[site_banners] insert unexpected error', err)
+    res.status(500).json({ error: 'Failed to save banner' })
+  }
+})
+
+// Set one banner active and all others inactive.
+app.put('/api/site/banners/:id/active', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.status(500).json({ error: 'Supabase not configured on server' })
+  }
+  const { id } = req.params
+  if (!id) {
+    return res.status(400).json({ error: 'id required' })
+  }
+  try {
+    const nowIso = new Date().toISOString()
+    // Deactivate all
+    const { error: resetErr } = await supabase
+      .from('site_banners')
+      .update({ is_active: false, updated_at: nowIso })
+      .eq('is_active', true)
+    if (resetErr) {
+      console.warn('[site_banners] deactivate all error', resetErr.message)
+    }
+
+    const { error: activateErr } = await supabase
+      .from('site_banners')
+      .update({ is_active: true, updated_at: nowIso })
+      .eq('id', id)
+    if (activateErr) {
+      console.error('[site_banners] activate error', activateErr)
+      return res.status(500).json({ error: 'Failed to activate banner' })
+    }
+
+    // Return latest list
+    const { data, error } = await supabase
+      .from('site_banners')
+      .select('id,data_url,kind,content_type,is_active,created_at')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.warn('[site_banners] select after activate error', error.message)
+      return res.json([])
+    }
+
+    const mapped = (data || []).map((row) => ({
+      id: row.id,
+      dataUrl: row.data_url,
+      kind: row.kind || 'image',
+      contentType: row.content_type || null,
+      active: !!row.is_active,
+      createdAt: row.created_at,
+    }))
+
+    res.json(mapped)
+  } catch (err) {
+    console.error('[site_banners] activate unexpected error', err)
+    res.status(500).json({ error: 'Failed to activate banner' })
+  }
+})
+
+// Delete a banner
+app.delete('/api/site/banners/:id', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.status(500).json({ error: 'Supabase not configured on server' })
+  }
+  const { id } = req.params
+  if (!id) {
+    return res.status(400).json({ error: 'id required' })
+  }
+  try {
+    const { error } = await supabase.from('site_banners').delete().eq('id', id)
+    if (error) {
+      console.error('[site_banners] delete error', error)
+      return res.status(500).json({ error: 'Failed to delete banner' })
+    }
+
+    const { data, error: selErr } = await supabase
+      .from('site_banners')
+      .select('id,data_url,kind,content_type,is_active,created_at')
+      .order('created_at', { ascending: false })
+
+    if (selErr) {
+      console.warn('[site_banners] select after delete error', selErr.message)
+      return res.json([])
+    }
+
+    const mapped = (data || []).map((row) => ({
+      id: row.id,
+      dataUrl: row.data_url,
+      kind: row.kind || 'image',
+      contentType: row.content_type || null,
+      active: !!row.is_active,
+      createdAt: row.created_at,
+    }))
+
+    res.json(mapped)
+  } catch (err) {
+    console.error('[site_banners] delete unexpected error', err)
+    res.status(500).json({ error: 'Failed to delete banner' })
+  }
+})
+
+// Homepage banner text / typography content
+app.get('/api/site/banner-content', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.json(DEFAULT_BANNER_CONTENT)
+  }
+  try {
+    const { data, error } = await supabase
+      .from('site_banner_content')
+      .select('*')
+      .eq('id', 'home-hero')
+      .maybeSingle()
+
+    if (error && error.code !== 'PGRST116') {
+      console.warn('[site_banner_content] select error', error.message)
+      return res.json(DEFAULT_BANNER_CONTENT)
+    }
+
+    if (!data) {
+      return res.json(DEFAULT_BANNER_CONTENT)
+    }
+
+    res.json({
+      headline: data.headline,
+      headlineBold: !!data.headline_bold,
+      headlineItalic: !!data.headline_italic,
+      headlineSize: data.headline_size,
+      headlineFont: data.headline_font,
+      body: data.body,
+      bodyBold: !!data.body_bold,
+      bodyItalic: !!data.body_italic,
+      bodySize: data.body_size,
+      bodyFont: data.body_font,
+    })
+  } catch (err) {
+    console.error('[site_banner_content] unexpected select error', err)
+    res.json(DEFAULT_BANNER_CONTENT)
+  }
+})
+
+app.put('/api/site/banner-content', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res.status(500).json({ error: 'Supabase not configured on server' })
+  }
+  const content = req.body?.content || {}
+  const merged = {
+    ...DEFAULT_BANNER_CONTENT,
+    ...content,
+  }
+  try {
+    const payload = {
+      id: 'home-hero',
+      headline: merged.headline,
+      headline_bold: !!merged.headlineBold,
+      headline_italic: !!merged.headlineItalic,
+      headline_size: merged.headlineSize,
+      headline_font: merged.headlineFont,
+      body: merged.body,
+      body_bold: !!merged.bodyBold,
+      body_italic: !!merged.bodyItalic,
+      body_size: merged.bodySize,
+      body_font: merged.bodyFont,
+      updated_at: new Date().toISOString(),
+    }
+
+    const { data, error } = await supabase
+      .from('site_banner_content')
+      .upsert(payload, { onConflict: 'id' })
+      .select('*')
+      .single()
+
+    if (error) {
+      console.error('[site_banner_content] upsert error', error)
+      return res.status(500).json({ error: 'Failed to save banner content' })
+    }
+
+    res.json({
+      headline: data.headline,
+      headlineBold: !!data.headline_bold,
+      headlineItalic: !!data.headline_italic,
+      headlineSize: data.headline_size,
+      headlineFont: data.headline_font,
+      body: data.body,
+      bodyBold: !!data.body_bold,
+      bodyItalic: !!data.body_italic,
+      bodySize: data.body_size,
+      bodyFont: data.body_font,
+    })
+  } catch (err) {
+    console.error('[site_banner_content] unexpected upsert error', err)
+    res.status(500).json({ error: 'Failed to save banner content' })
   }
 })
 
