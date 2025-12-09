@@ -1651,4 +1651,33 @@ app.put('/api/site/banner-content', async (req, res) => {
   }
 })
 
+// -------- Admin support tickets (server-side Supabase, bypassing RLS) --------
+app.get('/admin/support-tickets', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+  try {
+    const { data, error } = await supabase
+      .from('support_tickets')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('[admin/support-tickets] list error', error)
+      return res
+        .status(500)
+        .json({ error: 'Failed to list support tickets' })
+    }
+
+    res.json({ tickets: data || [] })
+  } catch (err) {
+    console.error('[admin/support-tickets] unexpected', err)
+    res
+      .status(500)
+      .json({ error: 'Failed to list support tickets' })
+  }
+})
+
 app.listen(PORT, () => console.log(`[s3-server] listening on ${PORT}`))
