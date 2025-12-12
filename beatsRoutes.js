@@ -59,7 +59,18 @@ router.post('/upload-beat', upload.single('file'), async (req, res) => {
         .json({ error: 'S3 bucket or region not configured' })
     }
 
-    const { user_id, producer_id, title, genre, bpm, description, price, producer } =
+    const {
+      user_id,
+      producer_id,
+      title,
+      genre,
+      bpm,
+      description,
+      price,
+      producer,
+      collaborator,
+      musical_key,
+    } =
       req.body || {}
     const file = req.file
 
@@ -91,6 +102,8 @@ router.post('/upload-beat', upload.single('file'), async (req, res) => {
         user_id: user_id || producer_id || null,
         title: title || 'Untitled Beat',
         producer: producer || null,
+        collaborator: collaborator || null,
+        musical_key: musical_key || null,
         genre: genre || null,
         bpm: bpm ? Number(bpm) : null,
         description: description || null,
