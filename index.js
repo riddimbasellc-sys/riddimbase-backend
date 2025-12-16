@@ -66,6 +66,93 @@ app.post('/api/upload-url', async (req, res) => {
   }
 })
 
+// Lightweight proxy for YouTube feeds / channel pages so the frontend
+// can load recent uploads without running into CORS restrictions.
+// Query: ?url=<full YouTube channel/handle/playlist URL or handle starting with @>
+app.get('/api/youtube-feed', async (req, res) => {
+  const raw = req.query.url
+  if (!raw) {
+    return res.status(400).json({ error: 'url query param is required' })
+  }
+
+  // Normalise handle-only input like "@name"
+  let target = raw.trim()
+  if (target.startsWith('@')) {
+    target = `https://www.youtube.com/${target}`
+  } else if (!/^https?:\/\//i.test(target)) {
+    target = `https://www.youtube.com/${target}`
+  }
+
+  try {
+    // Playlist: scrape a few video ids from HTML
+    if (target.includes('playlist?list=')) {
+      const resp = await fetch(target)
+      if (!resp.ok) {
+        return res.status(502).json({ error: 'Failed to load playlist page' })
+      }
+      const html = await resp.text()
+      const ids = [...html.matchAll(/watch\?v=([a-zA-Z0-9_-]{11})/g)].map(
+        (m) => m[1],
+      )
+      const unique = Array.from(new Set(ids)).slice(0, 6)
+      const videos = unique.map((id, idx) => ({
+        videoId: id,
+        title: `Playlist Video ${idx + 1}`,
+        published: null,
+      }))
+      return res.json({ videos })
+    }
+
+    // Resolve channel id for channel/@handle/user URLs
+    let channelId = null
+    const direct = target.match(/youtube\.com\/channel\/([a-zA-Z0-9_-]+)/)
+    if (direct) {
+      channelId = direct[1]
+    } else {
+      const resp = await fetch(target)
+      if (!resp.ok) {
+        return res.status(502).json({ error: 'Failed to load channel page' })
+      }
+      const html = await resp.text()
+      const match =
+        html.match(/channelId":"(UC[^"]+)/) ||
+        html.match(/"externalId":"(UC[^"]+)/)
+      if (match) channelId = match[1]
+    }
+
+    if (!channelId) {
+      return res.status(400).json({ error: 'Unable to resolve channel ID' })
+    }
+
+    const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`
+    const feedResp = await fetch(feedUrl)
+    if (!feedResp.ok) {
+      return res.status(502).json({ error: 'Failed to fetch channel feed' })
+    }
+    const xml = await feedResp.text()
+
+    // Simple XML parsing via regex for <entry> blocks
+    const entries = [...xml.matchAll(/<entry>[\s\S]*?<\/entry>/g)]
+    const videos = entries.slice(0, 6).map((m) => {
+      const block = m[0]
+      const idMatch = block.match(/<yt:videoId>([^<]+)<\/yt:videoId>/)
+      const titleMatch = block.match(/<title>([^<]+)<\/title>/)
+      return {
+        videoId: idMatch ? idMatch[1] : null,
+        title: titleMatch ? titleMatch[1] : 'Untitled',
+        published: null,
+      }
+    })
+      .filter((v) => v.videoId)
+      .slice(0, 3)
+
+    return res.json({ videos })
+  } catch (err) {
+    console.error('[youtube-feed] error', err)
+    return res.status(500).json({ error: 'Failed to resolve YouTube feed' })
+  }
+})
+
 // Generate license PDF, upload to S3, email link
 // Body: {
 //   beatTitle,
