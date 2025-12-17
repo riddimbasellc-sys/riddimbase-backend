@@ -12,6 +12,8 @@ import { createClient } from '@supabase/supabase-js'
 import authRoutes from './authRoutes.js'
 import settingsRoutes from './settingsRoutes.js'
 import beatsRoutes from './beatsRoutes.js'
+import collabRoutes from './collabRoutes.js'
+import salesRoutes from './salesRoutes.js'
 
 const app = express()
 app.use(cors())
@@ -19,6 +21,8 @@ app.use(express.json())
 app.use(authRoutes)
 app.use(settingsRoutes)
 app.use('/beats', beatsRoutes)
+app.use(collabRoutes)
+app.use(salesRoutes)
 
 const REGION = process.env.AWS_REGION
 const BUCKET = process.env.S3_BUCKET
