@@ -537,18 +537,8 @@ app.post('/api/producer-agreement', async (req, res) => {
 })
 
 // Supabase client for boosted_beats and future admin APIs
-const supabaseUrl = process.env.SUPABASE_URL
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+// Reuse the supabase client declared near the top of this file.
 const paypalWebhookId = process.env.PAYPAL_WEBHOOK_ID || null
-
-let supabase = null
-if (supabaseUrl && supabaseServiceKey) {
-  supabase = createClient(supabaseUrl, supabaseServiceKey, {
-    auth: { persistSession: false }
-  })
-} else {
-  console.warn('[supabase] SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY missing - boost APIs disabled')
-}
 
 const supabaseAvailable = () => !!supabase
 
