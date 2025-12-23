@@ -4,10 +4,17 @@ import { createClient } from '@supabase/supabase-js'
 const router = express.Router()
 
 // Supabase server client (use SERVICE ROLE key here – NOT the anon key)
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-)
+const supabaseUrl = process.env.SUPABASE_URL
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+let supabase = null
+if (supabaseUrl && supabaseServiceKey) {
+  supabase = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: { persistSession: false },
+  })
+} else {
+  console.warn('[authRoutes] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY; auth routes disabled')
+}
 
 const sanitizeUser = (user) => {
   if (!user) return null
@@ -22,6 +29,9 @@ const sanitizeUser = (user) => {
 // POST /api/auth/signup
 router.post('/api/auth/signup', async (req, res) => {
   try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Supabase not configured on backend' })
+    }
     const { email, password, fullName } = req.body || {}
     if (!email || !password) {
       return res
@@ -56,6 +66,9 @@ router.post('/api/auth/signup', async (req, res) => {
 // POST /api/auth/login
 router.post('/api/auth/login', async (req, res) => {
   try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Supabase not configured on backend' })
+    }
     const { email, password } = req.body || {}
     if (!email || !password) {
       return res
@@ -88,6 +101,9 @@ router.post('/api/auth/login', async (req, res) => {
 // GET /api/auth/me
 router.get('/api/auth/me', async (req, res) => {
   try {
+    if (!supabase) {
+      return res.status(500).json({ error: 'Supabase not configured on backend' })
+    }
     const authHeader = req.headers.authorization || ''
     const token = authHeader.startsWith('Bearer ')
       ? authHeader.slice(7)
