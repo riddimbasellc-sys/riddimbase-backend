@@ -24,6 +24,19 @@ app.use('/beats', beatsRoutes)
 app.use(collabRoutes)
 app.use(salesRoutes)
 
+// Supabase service-role client for server-side credit management
+const supabaseUrl = process.env.SUPABASE_URL
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+
+let supabase = null
+if (supabaseUrl && supabaseServiceKey) {
+  supabase = createClient(supabaseUrl, supabaseServiceKey, {
+    auth: { persistSession: false },
+  })
+} else {
+  console.warn('[server] Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY; credit routes disabled')
+}
+
 const REGION = process.env.AWS_REGION
 const BUCKET = process.env.S3_BUCKET
 
@@ -49,6 +62,233 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER) {
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
   })
 }
+
+// ---- Recording Lab credits ----
+
+const RECORDING_SESSION_COST = 200
+const SIGNUP_BONUS_CREDITS = 1000
+const CREDIT_PACKS = [
+  { id: 'pack_500', credits: 500, priceUsd: 5 },
+  { id: 'pack_1200', credits: 1200, priceUsd: 10 },
+  { id: 'pack_3000', credits: 3000, priceUsd: 20 },
+]
+
+const RECORDING_PLANS = {
+  studio_lite: {
+    id: 'studio_lite',
+    name: 'Studio Lite',
+    monthlyPriceUsd: 9.99,
+    monthlyCredits: 2000,
+    priority: false,
+  },
+  studio_pro: {
+    id: 'studio_pro',
+    name: 'Studio Pro',
+    monthlyPriceUsd: 19.99,
+    monthlyCredits: 6000,
+    priority: true,
+  },
+}
+
+const ensureCreditsRow = async (userId) => {
+  if (!supabase) return null
+  if (!userId) return null
+  const { data, error } = await supabase
+    .from('recording_credits')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw error
+  if (data) return data
+  const { data: inserted, error: insertError } = await supabase
+    .from('recording_credits')
+    .insert({ user_id: userId, balance: SIGNUP_BONUS_CREDITS })
+    .select('*')
+    .single()
+  if (insertError) throw insertError
+  if (inserted) {
+    await supabase.from('recording_credit_history').insert({
+      user_id: userId,
+      delta: SIGNUP_BONUS_CREDITS,
+      balance_after: inserted.balance,
+      reason: 'Signup bonus',
+      source: 'signup',
+    })
+  }
+  return inserted
+}
+
+const parseUserId = (req) => {
+  const authHeader = req.headers['x-user-id'] || req.headers['x-userid']
+  if (authHeader && typeof authHeader === 'string') return authHeader
+  return null
+}
+
+// GET /credits/balance -> { balance, costPerSession, packs, plans }
+app.get('/credits/balance', async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: 'Supabase not configured' })
+    const userId = parseUserId(req)
+    if (!userId) return res.status(401).json({ error: 'Missing user id' })
+
+    const row = await ensureCreditsRow(userId)
+    const balance = row?.balance ?? 0
+
+    res.json({
+      balance,
+      costPerSession: RECORDING_SESSION_COST,
+      packs: CREDIT_PACKS,
+      plans: Object.values(RECORDING_PLANS),
+      currentPlanId: row?.current_plan_id || null,
+      priorityProcessing: !!row?.priority_processing,
+    })
+  } catch (err) {
+    console.error('[credits/balance] error', err)
+    res.status(500).json({ error: 'Failed to load balance' })
+  }
+})
+
+// POST /credits/use { amount? } -> deduct credits when starting a session
+app.post('/credits/use', async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: 'Supabase not configured' })
+    const userId = parseUserId(req)
+    if (!userId) return res.status(401).json({ error: 'Missing user id' })
+
+    const amount = Number.isFinite(req.body?.amount)
+      ? Math.floor(req.body.amount)
+      : RECORDING_SESSION_COST
+    if (amount <= 0) return res.status(400).json({ error: 'Invalid amount' })
+
+    const row = await ensureCreditsRow(userId)
+    const current = row?.balance ?? 0
+    if (current < amount) {
+      return res.status(402).json({ error: 'Insufficient credits', balance: current })
+    }
+
+    const newBalance = current - amount
+    const { data, error } = await supabase
+      .from('recording_credits')
+      .update({ balance: newBalance })
+      .eq('user_id', userId)
+      .select('balance')
+      .single()
+    if (error) throw error
+
+    await supabase.from('recording_credit_history').insert({
+      user_id: userId,
+      delta: -amount,
+      balance_after: data.balance,
+      reason: 'Recording Lab session',
+      source: 'session',
+    })
+
+    res.json({ balance: data.balance })
+  } catch (err) {
+    console.error('[credits/use] error', err)
+    res.status(500).json({ error: 'Failed to use credits' })
+  }
+})
+
+// POST /credits/add { packId?, credits?, reason?, source?, meta? }
+// Intended to be called after successful payment / purchase webhook.
+app.post('/credits/add', async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: 'Supabase not configured' })
+    const userId = req.body?.userId || parseUserId(req)
+    if (!userId) return res.status(401).json({ error: 'Missing user id' })
+
+    let creditsToAdd = 0
+    let source = req.body?.source || 'purchase'
+    let reason = req.body?.reason || 'Credit purchase'
+
+    if (req.body?.packId) {
+      const pack = CREDIT_PACKS.find((p) => p.id === req.body.packId)
+      if (!pack) return res.status(400).json({ error: 'Invalid packId' })
+      creditsToAdd = pack.credits
+      reason = `Credit pack ${pack.id}`
+      source = 'purchase'
+    } else if (Number.isFinite(req.body?.credits)) {
+      creditsToAdd = Math.floor(req.body.credits)
+    }
+
+    if (!Number.isFinite(creditsToAdd) || creditsToAdd <= 0) {
+      return res.status(400).json({ error: 'Invalid credits amount' })
+    }
+
+    const row = await ensureCreditsRow(userId)
+    const current = row?.balance ?? 0
+    const newBalance = current + creditsToAdd
+
+    const { data, error } = await supabase
+      .from('recording_credits')
+      .update({ balance: newBalance })
+      .eq('user_id', userId)
+      .select('balance')
+      .single()
+    if (error) throw error
+
+    await supabase.from('recording_credit_history').insert({
+      user_id: userId,
+      delta: creditsToAdd,
+      balance_after: data.balance,
+      reason,
+      source,
+      meta: req.body?.meta || null,
+    })
+
+    res.json({ balance: data.balance })
+  } catch (err) {
+    console.error('[credits/add] error', err)
+    res.status(500).json({ error: 'Failed to add credits' })
+  }
+})
+
+// POST /subscriptions/sync { userId, planId }
+// Called by billing webhook or cron on renewal; resets monthly credits.
+app.post('/subscriptions/sync', async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: 'Supabase not configured' })
+    const userId = req.body?.userId
+    const planId = req.body?.planId
+    if (!userId || !planId) return res.status(400).json({ error: 'userId and planId required' })
+
+    const plan = RECORDING_PLANS[planId]
+    if (!plan) return res.status(400).json({ error: 'Unknown planId' })
+
+    const row = await ensureCreditsRow(userId)
+    const newBalance = plan.monthlyCredits
+
+    const { data, error } = await supabase
+      .from('recording_credits')
+      .update({
+        balance: newBalance,
+        current_plan_id: plan.id,
+        priority_processing: !!plan.priority,
+      })
+      .eq('user_id', userId)
+      .select('balance,current_plan_id,priority_processing')
+      .single()
+    if (error) throw error
+
+    await supabase.from('recording_credit_history').insert({
+      user_id: userId,
+      delta: newBalance,
+      balance_after: data.balance,
+      reason: `Subscription renewal (${plan.name})`,
+      source: 'subscription',
+    })
+
+    res.json({
+      balance: data.balance,
+      currentPlanId: data.current_plan_id,
+      priorityProcessing: data.priority_processing,
+    })
+  } catch (err) {
+    console.error('[subscriptions/sync] error', err)
+    res.status(500).json({ error: 'Failed to sync subscription' })
+  }
+})
 
 // Request a presigned URL for uploading a file
 // Body: { filename: string, contentType: string, folder?: string }
