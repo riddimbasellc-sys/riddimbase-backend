@@ -39,7 +39,7 @@ if (supabaseUrl && supabaseServiceKey) {
 
 const REGION = process.env.AWS_REGION
 const BUCKET = process.env.S3_BUCKET
-const WEB_BASE_URL = (process.env.WEB_BASE_URL || 'https://riddimbasesound.com').replace(/\/$/, '')
+const WEB_BASE_URL = (process.env.WEB_BASE_URL || 'https://riddimbase.app').replace(/\/$/, '')
 
 if (!REGION || !BUCKET) {
   console.warn('[s3-server] Missing AWS_REGION or S3_BUCKET env vars')
