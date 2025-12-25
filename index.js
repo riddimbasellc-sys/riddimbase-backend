@@ -1007,6 +1007,71 @@ app.get('/admin/metrics', async (req, res) => {
   }
 })
 
+// -------- Admin Recording Lab metrics (credits + sessions) --------
+// Returns aggregate stats for Recording Lab credits and sessions so the
+// admin analytics dashboard can show real-time KPIs.
+// Shape:
+// {
+//   totalCreditsIssued: number,
+//   totalCreditsUsed: number,
+//   totalCreditsRemaining: number,
+//   sessionsCompleted: number,
+//   avgCreditsPerSession: number
+// }
+app.get('/admin/recording-lab', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+
+  try {
+    const [creditsResp, historyResp] = await Promise.all([
+      supabase.from('recording_credits').select('balance'),
+      supabase.from('recording_credit_history').select('delta, source'),
+    ])
+
+    const creditRows = creditsResp?.data || []
+    const historyRows = historyResp?.data || []
+
+    let totalCreditsIssued = 0
+    let totalCreditsUsed = 0
+    let sessionsCompleted = 0
+
+    for (const row of historyRows) {
+      const delta = Number(row.delta) || 0
+      if (delta > 0) {
+        totalCreditsIssued += delta
+      } else if (delta < 0) {
+        // Treat negative deltas as usage; sessions specifically use source === 'session'.
+        totalCreditsUsed += -delta
+        if (row.source === 'session') {
+          sessionsCompleted += 1
+        }
+      }
+    }
+
+    const totalCreditsRemaining = creditRows.reduce(
+      (sum, r) => sum + (Number(r.balance) || 0),
+      0,
+    )
+
+    const avgCreditsPerSession =
+      sessionsCompleted > 0 ? totalCreditsUsed / sessionsCompleted : 0
+
+    res.json({
+      totalCreditsIssued,
+      totalCreditsUsed,
+      totalCreditsRemaining,
+      sessionsCompleted,
+      avgCreditsPerSession,
+    })
+  } catch (err) {
+    console.error('[admin/recording-lab] error', err)
+    res.status(500).json({ error: 'Failed to load Recording Lab metrics' })
+  }
+})
+
 // Public list of active boosted beats (for homepage, search, etc.)
 // Returns minimal data; frontend joins with beat catalog.
 app.get('/api/boosted', async (req, res) => {
