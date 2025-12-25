@@ -70,6 +70,7 @@ router.post('/upload-beat', upload.single('file'), async (req, res) => {
       producer,
       collaborator,
       musical_key,
+      free_download,
     } =
       req.body || {}
     const file = req.file
@@ -110,6 +111,10 @@ router.post('/upload-beat', upload.single('file'), async (req, res) => {
         price: price ? Number(price) : null,
         audio_url: audioUrl,
         cover_url: null,
+        free_download:
+          typeof free_download === 'string'
+            ? free_download === 'true'
+            : free_download === true,
       })
       .select('*')
       .single()
