@@ -39,6 +39,7 @@ if (supabaseUrl && supabaseServiceKey) {
 
 const REGION = process.env.AWS_REGION
 const BUCKET = process.env.S3_BUCKET
+const WEB_BASE_URL = (process.env.WEB_BASE_URL || 'https://riddimbasesound.com').replace(/\/$/, '')
 
 if (!REGION || !BUCKET) {
   console.warn('[s3-server] Missing AWS_REGION or S3_BUCKET env vars')
@@ -61,6 +62,49 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER) {
     secure: false,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
   })
+}
+
+// Helper: build a simple branded email for bonus Recording Lab credits
+function buildBonusCreditsEmail({ toEmail, displayName, amount, balance }) {
+  const safeName = displayName || toEmail || 'there'
+  const amountStr = Number(amount || 0).toLocaleString('en-US')
+  const balanceStr = Number(balance || 0).toLocaleString('en-US')
+  const studioUrl = `${WEB_BASE_URL}/studio`
+
+  const subject = '🎉 You\'ve received bonus Recording Lab credits!'
+  const text = `Hi ${safeName}, you just received ${amountStr} bonus Recording Lab credits on RiddimBase. Your new balance is ${balanceStr} credits. Open the Recording Lab to start a new session: ${studioUrl}`
+
+  const html = `
+  <div style="background:#020617;padding:24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#e2e8f0;">
+    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;background:#020617;border-radius:16px;border:1px solid #1f2937;overflow:hidden;">
+      <tr>
+        <td style="padding:20px 24px 12px 24px;border-bottom:1px solid #1f2937;background:radial-gradient(circle at top left,#22c55e33,#020617);">
+          <div style="font-size:13px;font-weight:600;letter-spacing:0.18em;text-transform:uppercase;color:#22c55e;">RiddimBase · Recording Lab</div>
+          <h1 style="margin:8px 0 0 0;font-size:20px;color:#f9fafb;">You\'ve received bonus credits 🎉</h1>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:20px 24px 4px 24px;">
+          <p style="font-size:14px;margin:0 0 8px 0;">Hi ${safeName},</p>
+          <p style="font-size:13px;line-height:1.6;margin:0 0 8px 0;">Good news – an admin just added <strong>${amountStr} Recording Lab credits</strong> to your account.</p>
+          <p style="font-size:13px;line-height:1.6;margin:0 0 12px 0;">Your updated Recording Lab balance is now <strong>${balanceStr} credits</strong>. Fire up a new session, experiment with ideas, and save your best takes.</p>
+          <div style="margin:20px 0 8px 0;">
+            <a href="${studioUrl}" style="display:inline-block;padding:10px 18px;border-radius:999px;background:linear-gradient(135deg,#22c55e,#f97316);color:#020617;font-size:13px;font-weight:600;text-decoration:none;">Open Recording Lab</a>
+          </div>
+          <p style="font-size:11px;color:#9ca3af;margin:18px 0 0 0;">Tip: each full Recording Lab session currently uses 200 credits.</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:14px 24px 18px 24px;border-top:1px solid #1f2937;font-size:11px;color:#6b7280;">
+          <div>RiddimBase · Home of Caribbean Beats</div>
+          <div style="margin-top:4px;">You received this email because you have a RiddimBase account with Recording Lab access.</div>
+        </td>
+      </tr>
+    </table>
+  </div>
+  `
+
+  return { subject, text, html }
 }
 
 // ---- Recording Lab credits ----
@@ -1069,6 +1113,151 @@ app.get('/admin/recording-lab', async (req, res) => {
   } catch (err) {
     console.error('[admin/recording-lab] error', err)
     res.status(500).json({ error: 'Failed to load Recording Lab metrics' })
+  }
+})
+
+// Per-user Recording Lab admin view: balance + recent transactions
+// GET /admin/recording-lab/user/:id -> { user, balance, transactions[] }
+app.get('/admin/recording-lab/user/:id', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+
+  const { id } = req.params
+  if (!id) {
+    return res.status(400).json({ error: 'userId is required' })
+  }
+
+  try {
+    const [creditsRow, historyResp, userResp] = await Promise.all([
+      ensureCreditsRow(id),
+      supabase
+        .from('recording_credit_history')
+        .select('id, delta, balance_after, reason, source, created_at')
+        .eq('user_id', id)
+        .order('created_at', { ascending: false })
+        .limit(50),
+      supabase.auth.admin.getUserById(id).catch(() => ({ data: null, error: null })),
+    ])
+
+    const balance = creditsRow?.balance ?? 0
+    const txRows = historyResp?.data || []
+
+    const transactions = txRows.map((row) => ({
+      id: row.id,
+      amount: row.delta,
+      type: row.source,
+      description: row.reason,
+      balanceAfter: row.balance_after,
+      createdAt: row.created_at,
+    }))
+
+    const authUser = userResp?.data?.user || null
+    const user = authUser
+      ? {
+          id: authUser.id,
+          email: authUser.email,
+          name: authUser.user_metadata?.display_name || null,
+        }
+      : { id, email: null, name: null }
+
+    res.json({ user, balance, transactions })
+  } catch (err) {
+    console.error('[admin/recording-lab/user] error', err)
+    res.status(500).json({ error: 'Failed to load Recording Lab user data' })
+  }
+})
+
+// Admin-only manual credit grant
+// POST /admin/recording-lab/credits/add
+// Body: { userId, amount, reason? }
+app.post('/admin/recording-lab/credits/add', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+
+  const { userId, amount, reason } = req.body || {}
+  const numericAmount = Number(amount)
+
+  if (!userId || !Number.isFinite(numericAmount)) {
+    return res.status(400).json({ error: 'userId and amount are required' })
+  }
+  if (numericAmount <= 0) {
+    return res.status(400).json({ error: 'Amount must be greater than zero' })
+  }
+
+  try {
+    const creditsToAdd = Math.floor(numericAmount)
+    const row = await ensureCreditsRow(userId)
+    const current = row?.balance ?? 0
+    const newBalance = current + creditsToAdd
+
+    const { data: balanceRow, error: updErr } = await supabase
+      .from('recording_credits')
+      .update({ balance: newBalance })
+      .eq('user_id', userId)
+      .select('balance')
+      .single()
+    if (updErr) throw updErr
+
+    const { data: historyRow, error: histErr } = await supabase
+      .from('recording_credit_history')
+      .insert({
+        user_id: userId,
+        delta: creditsToAdd,
+        balance_after: balanceRow.balance,
+        reason: reason || 'Admin bonus credits',
+        source: 'admin_bonus',
+      })
+      .select('id, delta, balance_after, reason, source, created_at')
+      .single()
+    if (histErr) throw histErr
+
+    let authUser = null
+    try {
+      const { data } = await supabase.auth.admin.getUserById(userId)
+      authUser = data?.user || null
+    } catch {
+      authUser = null
+    }
+
+    if (transporter && authUser?.email) {
+      try {
+        const { subject, text, html } = buildBonusCreditsEmail({
+          toEmail: authUser.email,
+          displayName: authUser.user_metadata?.display_name || null,
+          amount: creditsToAdd,
+          balance: balanceRow.balance,
+        })
+        await transporter.sendMail({
+          from: process.env.EMAIL_FROM || 'no-reply@riddimbasesound.com',
+          to: authUser.email,
+          subject,
+          text,
+          html,
+        })
+      } catch (e) {
+        console.warn('[admin/recording-lab bonus-email] send failed', e.message)
+      }
+    }
+
+    const transaction = {
+      id: historyRow.id,
+      amount: historyRow.delta,
+      type: historyRow.source,
+      description: historyRow.reason,
+      balanceAfter: historyRow.balance_after,
+      createdAt: historyRow.created_at,
+    }
+
+    res.json({ balance: balanceRow.balance, transaction })
+  } catch (err) {
+    console.error('[admin/recording-lab/credits/add] error', err)
+    res.status(500).json({ error: 'Failed to add Recording Lab credits' })
   }
 })
 
