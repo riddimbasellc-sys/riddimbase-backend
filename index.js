@@ -2,7 +2,7 @@ import dotenv from 'dotenv'
 dotenv.config()
 import express from 'express'
 import cors from 'cors'
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import PDFDocument from 'pdfkit'
 import nodemailer from 'nodemailer'
@@ -351,6 +351,99 @@ app.post('/api/upload-url', async (req, res) => {
   } catch (err) {
     console.error('[s3-server] upload-url error', err)
     res.status(500).json({ error: 'Failed to create presigned URL' })
+  }
+})
+
+// Helper: extract S3 object key from a public URL we generated
+const extractS3KeyFromUrl = (url) => {
+  if (!url || typeof url !== 'string') return null
+  try {
+    const trimmed = url.trim()
+    // Expect pattern like: https://<bucket>.s3.<region>.amazonaws.com/<key>
+    const idx = trimmed.indexOf('.amazonaws.com/')
+    if (idx === -1) return null
+    const pathStart = trimmed.indexOf('/', idx + '.amazonaws.com'.length + 1)
+    if (pathStart === -1 || pathStart >= trimmed.length - 1) return null
+    const key = trimmed.slice(pathStart + 1)
+    return decodeURIComponent(key)
+  } catch {
+    return null
+  }
+}
+
+// POST /studio-sessions/:id/delete
+// Deletes a studio session row and attempts to remove any S3-hosted vocal takes
+// associated with that session's state.
+app.post('/studio-sessions/:id/delete', async (req, res) => {
+  try {
+    if (!supabase) return res.status(500).json({ error: 'Supabase not configured' })
+    if (!s3 || !BUCKET) return res.status(500).json({ error: 'S3 not configured' })
+
+    const userId = parseUserId(req)
+    if (!userId) return res.status(401).json({ error: 'Missing user id' })
+
+    const sessionId = req.params.id
+    if (!sessionId) return res.status(400).json({ error: 'Missing session id' })
+
+    const { data: session, error } = await supabase
+      .from('studio_sessions')
+      .select('id,user_id,state')
+      .eq('id', sessionId)
+      .maybeSingle()
+
+    if (error) {
+      console.error('[studio-sessions/delete] load error', error)
+      return res.status(500).json({ error: 'Failed to load session' })
+    }
+    if (!session) return res.status(404).json({ error: 'Session not found' })
+    if (session.user_id !== userId) {
+      return res.status(403).json({ error: 'Not allowed to delete this session' })
+    }
+
+    const state = session.state || {}
+    const urls = []
+    if (Array.isArray(state.vocalTracks)) {
+      for (const t of state.vocalTracks) {
+        const clipUrl = t?.clip?.url
+        if (clipUrl && typeof clipUrl === 'string' && clipUrl.includes('.amazonaws.com/')) {
+          urls.push(clipUrl)
+        }
+      }
+    }
+
+    const keys = Array.from(
+      new Set(
+        urls
+          .map((u) => extractS3KeyFromUrl(u))
+          .filter((k) => !!k),
+      ),
+    )
+
+    const deletedKeys = []
+    for (const key of keys) {
+      try {
+        await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }))
+        deletedKeys.push(key)
+      } catch (err) {
+        console.error('[studio-sessions/delete] S3 delete error', key, err)
+      }
+    }
+
+    const { error: delError } = await supabase
+      .from('studio_sessions')
+      .delete()
+      .eq('id', sessionId)
+      .eq('user_id', userId)
+
+    if (delError) {
+      console.error('[studio-sessions/delete] supabase delete error', delError)
+      return res.status(500).json({ error: 'Failed to delete session' })
+    }
+
+    return res.json({ ok: true, deletedSessionId: sessionId, deletedFiles: deletedKeys.length })
+  } catch (err) {
+    console.error('[studio-sessions/delete] unexpected', err)
+    return res.status(500).json({ error: 'Failed to delete session' })
   }
 })
 
