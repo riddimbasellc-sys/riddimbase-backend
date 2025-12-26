@@ -66,45 +66,62 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER) {
 
 // Helper: build a simple branded email for bonus Recording Lab credits
 function buildBonusCreditsEmail({ toEmail, displayName, amount, balance }) {
-  const safeName = displayName || toEmail || 'there'
-  const amountStr = Number(amount || 0).toLocaleString('en-US')
-  const balanceStr = Number(balance || 0).toLocaleString('en-US')
-  const studioUrl = `${WEB_BASE_URL}/studio`
+    const safeName = displayName || toEmail || 'there'
+    const amountStr = Number(amount || 0).toLocaleString('en-US')
+    const balanceStr = Number(balance || 0).toLocaleString('en-US')
+    const studioUrl = `${WEB_BASE_URL}/studio`
 
-  const subject = '🎉 You\'ve received bonus Recording Lab credits!'
-  const text = `Hi ${safeName}, you just received ${amountStr} bonus Recording Lab credits on RiddimBase. Your new balance is ${balanceStr} credits. Open the Recording Lab to start a new session: ${studioUrl}`
+    const subject = '🎉 Bonus Recording Lab credits added!'
+    const text = `Hi ${safeName}, you just received ${amountStr} bonus Recording Lab credits on RiddimBase. Your new balance is ${balanceStr} credits. Open the Recording Lab to start a new session: ${studioUrl}`
 
-  const html = `
-  <div style="background:#020617;padding:24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#e2e8f0;">
-    <table width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;margin:0 auto;background:#020617;border-radius:16px;border:1px solid #1f2937;overflow:hidden;">
-      <tr>
-        <td style="padding:20px 24px 12px 24px;border-bottom:1px solid #1f2937;background:radial-gradient(circle at top left,#22c55e33,#020617);">
-          <div style="font-size:13px;font-weight:600;letter-spacing:0.18em;text-transform:uppercase;color:#22c55e;">RiddimBase · Recording Lab</div>
-          <h1 style="margin:8px 0 0 0;font-size:20px;color:#f9fafb;">You\'ve received bonus credits 🎉</h1>
-        </td>
-      </tr>
-      <tr>
-        <td style="padding:20px 24px 4px 24px;">
-          <p style="font-size:14px;margin:0 0 8px 0;">Hi ${safeName},</p>
-          <p style="font-size:13px;line-height:1.6;margin:0 0 8px 0;">Good news – an admin just added <strong>${amountStr} Recording Lab credits</strong> to your account.</p>
-          <p style="font-size:13px;line-height:1.6;margin:0 0 12px 0;">Your updated Recording Lab balance is now <strong>${balanceStr} credits</strong>. Fire up a new session, experiment with ideas, and save your best takes.</p>
-          <div style="margin:20px 0 8px 0;">
-            <a href="${studioUrl}" style="display:inline-block;padding:10px 18px;border-radius:999px;background:linear-gradient(135deg,#22c55e,#f97316);color:#020617;font-size:13px;font-weight:600;text-decoration:none;">Open Recording Lab</a>
-          </div>
-          <p style="font-size:11px;color:#9ca3af;margin:18px 0 0 0;">Tip: each full Recording Lab session currently uses 200 credits.</p>
-        </td>
-      </tr>
-      <tr>
-        <td style="padding:14px 24px 18px 24px;border-top:1px solid #1f2937;font-size:11px;color:#6b7280;">
-          <div>RiddimBase · Home of Caribbean Beats</div>
-          <div style="margin-top:4px;">You received this email because you have a RiddimBase account with Recording Lab access.</div>
-        </td>
-      </tr>
-    </table>
-  </div>
-  `
+    const html = `
+<table width="100%" cellpadding="0" cellspacing="0" style="margin:0;background:#0b0b0b;color:#ffffff;">
+  <tr>
+    <td align="center" style="padding:40px 20px;">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#121212;border-radius:12px;padding:30px;">
+        <tr>
+          <td align="center">
+            <h1 style="color:#00ffa3;margin:0 0 8px 0;font-size:24px;">🎉 Credits Added!</h1>
+            <p style="color:#cccccc;font-size:16px;margin:0;">
+              You just received bonus Recording Lab credits.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:20px 0;font-size:15px;color:#e5e7eb;">
+            <p style="margin:0 0 8px 0;">
+              Hi ${safeName}, we've added
+              <strong style="color:#00ffa3;">${amountStr} credits</strong>
+              to your Recording Lab account.
+            </p>
+            <p style="margin:8px 0 0 0;">
+              Your updated balance is <strong>${balanceStr} credits</strong>.
+            </p>
+            <p style="margin:12px 0 0 0;">
+              Jump into the studio, record vocals, arrange tracks,
+              and bring your ideas to life — directly on RiddimBase.
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding-top:4px;">
+            <a href="${studioUrl}" style="background:#00ffa3;color:#000;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:14px;display:inline-block;">
+              Open Recording Lab
+            </a>
+          </td>
+        </tr>
+        <tr>
+          <td align="center" style="padding-top:30px;font-size:12px;color:#777;">
+            RiddimBase — Create. Record. Earn.
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+</table>
+    `
 
-  return { subject, text, html }
+    return { subject, text, html }
 }
 
 // ---- Recording Lab credits ----
