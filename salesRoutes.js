@@ -29,30 +29,45 @@ router.post('/sales/record-split', async (req, res) => {
       return res.status(400).json({ error: 'sale_id, beat_id and amount are required' })
     }
     const creatorRevenue = Math.max(0, totalAmount * (1 - Number(platform_fee_rate || 0)))
+
+    // Resolve beat owner so we can credit the producer wallet.
+    const { data: beatRow, error: beatErr } = await supabase
+      .from('beats')
+      .select('id,user_id')
+      .eq('id', beat_id)
+      .maybeSingle()
+    if (beatErr) return res.status(400).json({ error: beatErr.message })
+    const producerUserId = beatRow?.user_id || null
+
     const { data: collabs, error: collabErr } = await supabase
       .from('collaborators')
       .select('id, user_id, split_percentage')
       .eq('beat_id', beat_id)
     if (collabErr) return res.status(400).json({ error: collabErr.message })
-    if (!collabs || collabs.length === 0) {
-      return res.json({ ok: true, entries: [], message: 'No collaborators found' })
-    }
+
     const inserts = []
+    let collaboratorTotal = 0
     for (const c of collabs) {
       const payout = Number(((creatorRevenue * Number(c.split_percentage || 0)) / 100).toFixed(2))
+      collaboratorTotal += payout
       inserts.push({ sale_id, beat_id, collaborator_id: c.id, amount_earned: payout, currency })
     }
-    // Insert split ledger rows
-    const { data: ledger, error: ledgerErr } = await supabase
-      .from('beat_sales_split')
-      .insert(inserts)
-      .select('*')
-    if (ledgerErr) return res.status(400).json({ error: ledgerErr.message })
+
+    // Insert split ledger rows (if any collaborators)
+    let ledger = []
+    if (inserts.length) {
+      const { data: ledgerRows, error: ledgerErr } = await supabase
+        .from('beat_sales_split')
+        .insert(inserts)
+        .select('*')
+      if (ledgerErr) return res.status(400).json({ error: ledgerErr.message })
+      ledger = ledgerRows || []
+    }
+
     // Update wallets for collaborators with user_id
     for (const c of collabs) {
       if (!c.user_id) continue
       const payout = Number(((creatorRevenue * Number(c.split_percentage || 0)) / 100).toFixed(2))
-      // Upsert wallet balance
       const { data: wallet } = await supabase
         .from('user_wallet')
         .select('user_id,balance')
@@ -63,7 +78,22 @@ router.post('/sales/record-split', async (req, res) => {
         .from('user_wallet')
         .upsert({ user_id: c.user_id, balance: newBalance, updated_at: new Date().toISOString() })
     }
-    return res.json({ ok: true, entries: ledger || [], creatorRevenue })
+
+    // Credit producer with the remainder of creator revenue after collaborator splits.
+    const producerNet = Math.max(0, Number((creatorRevenue - collaboratorTotal).toFixed(2)))
+    if (producerUserId && producerNet > 0) {
+      const { data: wallet } = await supabase
+        .from('user_wallet')
+        .select('user_id,balance')
+        .eq('user_id', producerUserId)
+        .maybeSingle()
+      const newBalance = Number((Number(wallet?.balance || 0) + producerNet).toFixed(2))
+      await supabase
+        .from('user_wallet')
+        .upsert({ user_id: producerUserId, balance: newBalance, updated_at: new Date().toISOString() })
+    }
+
+    return res.json({ ok: true, entries: ledger || [], creatorRevenue, producerNet, collaboratorTotal })
   } catch (e) {
     console.error('[salesRoutes] record-split error', e)
     return res.status(500).json({ error: 'Server error' })

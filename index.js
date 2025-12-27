@@ -14,6 +14,7 @@ import settingsRoutes from './settingsRoutes.js'
 import beatsRoutes from './beatsRoutes.js'
 import collabRoutes from './collabRoutes.js'
 import salesRoutes from './salesRoutes.js'
+import payoutRoutes from './payoutRoutes.js'
 
 const app = express()
 app.use(cors())
@@ -23,6 +24,7 @@ app.use(settingsRoutes)
 app.use('/beats', beatsRoutes)
 app.use(collabRoutes)
 app.use(salesRoutes)
+app.use(payoutRoutes)
 
 // Supabase service-role client for server-side credit management
 const supabaseUrl = process.env.SUPABASE_URL
@@ -1510,6 +1512,60 @@ app.post('/api/jobs/:jobId/pay', async (req, res) => {
   } catch (err) {
     console.error('[job-pay] unexpected error', err)
     return res.status(500).json({ error: 'Failed to record job payment' })
+  }
+})
+
+// Credit provider earnings when escrow is released.
+// This is called after the client sets job_escrow.released=true.
+app.post('/api/jobs/:jobId/release', async (req, res) => {
+  const { jobId } = req.params || {}
+  if (!jobId) return res.status(400).json({ error: 'jobId required' })
+  if (!supabaseAvailable()) {
+    console.warn('[job-release] Supabase not configured; skipping wallet credit')
+    return res.status(200).json({ ok: true, credited: false })
+  }
+  try {
+    const { data: job, error: jobErr } = await supabase
+      .from('job_requests')
+      .select('id, assigned_provider_id')
+      .eq('id', jobId)
+      .maybeSingle()
+    if (jobErr) return res.status(500).json({ error: 'Failed to load job' })
+    const providerId = job?.assigned_provider_id || null
+    if (!providerId) {
+      return res.status(200).json({ ok: true, credited: false, reason: 'No assigned provider' })
+    }
+
+    const { data: escrow, error: escrowErr } = await supabase
+      .from('job_escrow')
+      .select('funded,released,amount,currency')
+      .eq('job_id', jobId)
+      .maybeSingle()
+    if (escrowErr) return res.status(500).json({ error: 'Failed to load escrow' })
+    if (!escrow?.funded || !escrow?.released) {
+      return res.status(409).json({ error: 'Escrow not released' })
+    }
+
+    const gross = Number(escrow.amount || 0)
+    const currency = escrow.currency || 'USD'
+    const feeRate = Number(process.env.JOB_PLATFORM_FEE_RATE || 0)
+    const net = Math.max(0, Number((gross * (1 - feeRate)).toFixed(2)))
+    if (net <= 0) return res.status(200).json({ ok: true, credited: false, net })
+
+    const { data: wallet } = await supabase
+      .from('user_wallet')
+      .select('user_id,balance')
+      .eq('user_id', providerId)
+      .maybeSingle()
+    const newBalance = Number((Number(wallet?.balance || 0) + net).toFixed(2))
+    await supabase
+      .from('user_wallet')
+      .upsert({ user_id: providerId, balance: newBalance, updated_at: new Date().toISOString() })
+
+    return res.status(200).json({ ok: true, credited: true, providerId, gross, net, currency })
+  } catch (err) {
+    console.error('[job-release] unexpected error', err)
+    return res.status(500).json({ error: 'Failed to credit provider wallet' })
   }
 })
 
