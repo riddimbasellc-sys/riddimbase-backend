@@ -2484,4 +2484,104 @@ app.get('/admin/support-tickets', async (req, res) => {
   }
 })
 
+// Admin: list support agents
+app.get('/admin/support-agents', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('support_agents')
+      .select('*')
+      .order('created_at', { ascending: true })
+
+    if (error) {
+      console.error('[admin/support-agents] list error', error)
+      return res
+        .status(500)
+        .json({ error: 'Failed to list support agents' })
+    }
+
+    return res.json({ agents: data || [] })
+  } catch (err) {
+    console.error('[admin/support-agents] unexpected', err)
+    return res
+      .status(500)
+      .json({ error: 'Failed to list support agents' })
+  }
+})
+
+// Admin: create support agent via service-role Supabase
+app.post('/admin/support-agents', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ error: 'Supabase not configured on server' })
+  }
+
+  try {
+    const {
+      userId,
+      displayName,
+      name,
+      avatarVariant,
+      email,
+      phone,
+      address,
+      startDate,
+      workDays,
+      workStart,
+      workEnd,
+    } = req.body || {}
+
+    const variant = avatarVariant || 'male'
+    const variantMap = {
+      male: '/agent-male.svg',
+      female: '/agent-female.svg',
+    }
+
+    const record = {
+      user_id: userId || null,
+      display_name: displayName || name || 'Agent',
+      avatar_url: variantMap[variant] || variantMap.male,
+      email: email || null,
+      phone: phone || null,
+      address: address || null,
+      start_date: startDate || null,
+      work_days:
+        Array.isArray(workDays) && workDays.length
+          ? workDays
+          : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'],
+      work_start: workStart || '08:00',
+      work_end: workEnd || '17:00',
+      status: 'offline',
+      last_status_at: new Date().toISOString(),
+      active: true,
+    }
+
+    const { data, error } = await supabase
+      .from('support_agents')
+      .insert(record)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('[admin/support-agents] create error', error)
+      return res.status(500).json({
+        error: error.message || 'Failed to create support agent',
+      })
+    }
+
+    return res.json({ agent: data })
+  } catch (err) {
+    console.error('[admin/support-agents] unexpected', err)
+    return res
+      .status(500)
+      .json({ error: 'Failed to create support agent' })
+  }
+})
+
 app.listen(PORT, () => console.log(`[s3-server] listening on ${PORT}`))
