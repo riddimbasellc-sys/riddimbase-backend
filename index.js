@@ -2392,7 +2392,70 @@ app.put('/api/site/banner-content', async (req, res) => {
   }
 })
 
-// -------- Admin support tickets (server-side Supabase, bypassing RLS) --------
+// -------- Public + admin support tickets (server-side Supabase, bypassing RLS) --------
+
+// Public endpoint to create support tickets using the service-role Supabase client.
+app.post('/support-tickets', async (req, res) => {
+  if (!supabaseAvailable()) {
+    return res
+      .status(500)
+      .json({ stored: false, error: 'Supabase not configured on server' })
+  }
+  try {
+    const {
+      subject,
+      message,
+      category,
+      priority,
+      contactEmail,
+      contactPhone,
+      userId,
+      assignedTo,
+    } = req.body || {}
+
+    if (!subject || !message || !contactEmail) {
+      return res.status(400).json({
+        stored: false,
+        error: 'subject, message, and contactEmail are required',
+      })
+    }
+
+    const payload = {
+      subject,
+      message,
+      category: category || 'general',
+      priority: priority || 'normal',
+      contact_email: contactEmail,
+      contact_phone: contactPhone || null,
+      created_by: userId || null,
+      assigned_to: assignedTo || null,
+      status: 'open',
+    }
+
+    const { data, error } = await supabase
+      .from('support_tickets')
+      .insert(payload)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('[support-tickets] create error', error)
+      return res.status(500).json({
+        stored: false,
+        error: error.message || 'Failed to create support ticket',
+      })
+    }
+
+    return res.json({ stored: true, ticket: data })
+  } catch (err) {
+    console.error('[support-tickets] unexpected', err)
+    res.status(500).json({
+      stored: false,
+      error: 'Failed to create support ticket',
+    })
+  }
+})
+
 app.get('/admin/support-tickets', async (req, res) => {
   if (!supabaseAvailable()) {
     return res
