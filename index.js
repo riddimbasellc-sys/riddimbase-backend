@@ -833,16 +833,42 @@ app.get('/admin/users', async (req, res) => {
       return res.status(500).json({ error: 'Failed to load users' })
     }
 
-    const src = Array.isArray(data?.users) ? data.users : (Array.isArray(data) ? data : [])
+    const src = Array.isArray(data?.users)
+      ? data.users
+      : Array.isArray(data)
+      ? data
+      : []
 
-    const users = src.map((u) => ({
-      id: u.id,
-      email: u.email,
-      banned: !!u.user_metadata?.banned,
-      producer: !!u.user_metadata?.producer,
-      createdAt: u.created_at || null,
-      lastSignInAt: u.last_sign_in_at || null
-    }))
+    const userIds = src.map((u) => u.id).filter(Boolean)
+    let profileMap = {}
+
+    if (userIds.length) {
+      const { data: profiles, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id, role, display_name')
+        .in('id', userIds)
+
+      if (!profilesError && Array.isArray(profiles)) {
+        profileMap = profiles.reduce((acc, row) => {
+          acc[row.id] = row
+          return acc
+        }, {})
+      }
+    }
+
+    const users = src.map((u) => {
+      const profile = profileMap[u.id] || {}
+      return {
+        id: u.id,
+        email: u.email,
+        banned: !!u.user_metadata?.banned,
+        producer: !!u.user_metadata?.producer,
+        createdAt: u.created_at || null,
+        lastSignInAt: u.last_sign_in_at || null,
+        role: profile.role || null,
+        displayName: profile.display_name || null,
+      }
+    })
 
     res.json(users)
   } catch (err) {
