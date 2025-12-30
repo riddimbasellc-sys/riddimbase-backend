@@ -45,6 +45,8 @@ let settings = {
         active: true,
       },
     ],
+    // Used when no hero media background is configured.
+    backgroundColor: '#050505',
   },
   advancedCss: '',
 }
