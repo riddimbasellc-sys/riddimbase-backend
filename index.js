@@ -1763,13 +1763,13 @@ app.delete('/api/boosts/:id', async (req, res) => {
 })
 
 // Manually activate a subscription record after PayPal approve flow.
-// Body: { userId, planId, providerSubscriptionId }
+// Body: { userId, planId, providerSubscriptionId, billingCycle? }
 app.post('/api/subscriptions/activate', async (req, res) => {
   if (!supabaseAvailable()) {
     return res.status(503).json({ error: 'Supabase unavailable' })
   }
   try {
-    const { userId, planId, providerSubscriptionId } = req.body || {}
+    const { userId, planId, providerSubscriptionId, billingCycle } = req.body || {}
     if (!userId || !planId || !providerSubscriptionId) {
       return res.status(400).json({ error: 'userId, planId and providerSubscriptionId required' })
     }
@@ -1780,6 +1780,7 @@ app.post('/api/subscriptions/activate', async (req, res) => {
       status: 'active',
       provider: 'paypal',
       provider_subscription_id: providerSubscriptionId,
+      billing_cycle: billingCycle || null,
       auto_renew: true,
       current_period_end: currentPeriodEnd,
       cancel_at_period_end: false,
